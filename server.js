@@ -8,11 +8,14 @@ require('dotenv').config();
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: ['https://kazi-ocha-frontend-887d.vercel.app', 'http://localhost:3000'],
+    credentials: true
+}));
 app.use(express.json());
 
 // MongoDB Connection
-mongoose.connect(process.env.MONGO_URI, {
+mongoose.connect(process.env.MONGO_URI || 'mongodb+srv://mukky254:muhidinaliko2006@cluster0.bneqb6q.mongodb.net/kaziDB?retryWrites=true&w=majority&appName=Cluster0', {
     useNewUrlParser: true,
     useUnifiedTopology: true,
 })
@@ -60,7 +63,7 @@ const authenticateToken = (req, res, next) => {
         return res.status(401).json({ success: false, error: 'Access token required' });
     }
 
-    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    jwt.verify(token, process.env.JWT_SECRET || 'my-super-secret-key-12345', (err, user) => {
         if (err) {
             return res.status(403).json({ success: false, error: 'Invalid token' });
         }
@@ -71,6 +74,15 @@ const authenticateToken = (req, res, next) => {
 
 // Routes
 
+// Health check
+app.get('/', (req, res) => {
+    res.json({ 
+        success: true, 
+        message: 'Kazi Mashinani API is running!', 
+        timestamp: new Date().toISOString() 
+    });
+});
+
 // Check if phone exists
 app.post('/auth/check-phone', async (req, res) => {
     try {
@@ -80,6 +92,7 @@ app.post('/auth/check-phone', async (req, res) => {
         const existingUser = await User.findOne({ phone: cleanPhone });
         res.json({ exists: !!existingUser });
     } catch (error) {
+        console.error('Check phone error:', error);
         res.status(500).json({ success: false, error: 'Server error' });
     }
 });
@@ -88,6 +101,8 @@ app.post('/auth/check-phone', async (req, res) => {
 app.post('/auth/signup', async (req, res) => {
     try {
         const { name, phone, location, password, role, specialization, jobType } = req.body;
+        
+        console.log('Signup attempt:', { name, phone, location, role });
         
         // Validate required fields
         if (!name || !phone || !location || !password || !role) {
@@ -121,7 +136,7 @@ app.post('/auth/signup', async (req, res) => {
         // Generate token
         const token = jwt.sign(
             { userId: user._id, phone: user.phone, role: user.role },
-            process.env.JWT_SECRET,
+            process.env.JWT_SECRET || 'my-super-secret-key-12345',
             { expiresIn: '24h' }
         );
 
@@ -152,6 +167,8 @@ app.post('/auth/signin', async (req, res) => {
     try {
         const { phone, password } = req.body;
         
+        console.log('Signin attempt:', { phone });
+        
         if (!phone || !password) {
             return res.status(400).json({ success: false, error: 'Phone and password are required' });
         }
@@ -177,7 +194,7 @@ app.post('/auth/signin', async (req, res) => {
         // Generate token
         const token = jwt.sign(
             { userId: user._id, phone: user.phone, role: user.role },
-            process.env.JWT_SECRET,
+            process.env.JWT_SECRET || 'my-super-secret-key-12345',
             { expiresIn: '24h' }
         );
 
@@ -428,4 +445,5 @@ app.get('/health', (req, res) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+    console.log(`Health check: http://localhost:${PORT}/health`);
 });
