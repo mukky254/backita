@@ -6,33 +6,39 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 
-// Middleware
-app.use(cors());
+// Middleware - Enable CORS for all origins during development
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    credentials: true
+}));
+
 app.use(express.json());
 
-// Environment variables with fallbacks
+// Environment variables
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://mukky254:muhidinaliko2006@cluster0.bneqb6q.mongodb.net/kaziDB?retryWrites=true&w=majority&appName=Cluster0';
 const JWT_SECRET = process.env.JWT_SECRET || 'my-super-secret-key-12345';
 
-console.log('Starting server with configuration:', {
-  PORT,
-  MONGO_URI: MONGO_URI ? 'Mongo URI is set' : 'Mongo URI is missing',
-  JWT_SECRET: JWT_SECRET ? 'JWT Secret is set' : 'JWT Secret is missing'
-});
+console.log('🔧 Starting Kazi Mashinani Backend...');
+console.log('📊 MongoDB URI:', MONGO_URI ? 'Configured' : 'Missing');
 
-// MongoDB Connection
+// MongoDB Connection with better error handling
 mongoose.connect(MONGO_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true,
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
 })
-.then(() => console.log('✅ MongoDB connected successfully'))
+.then(() => {
+    console.log('✅ MongoDB connected successfully to kaziDB');
+    console.log('📁 Collections:', Object.keys(mongoose.connection.collections));
+})
 .catch(err => {
-    console.log('❌ MongoDB connection error:', err);
-    console.log('💡 Please check your MongoDB connection string');
+    console.log('❌ MongoDB connection error:', err.message);
 });
 
-// Simple User Schema
+// User Schema
 const userSchema = new mongoose.Schema({
     name: { type: String, required: true },
     phone: { type: String, required: true, unique: true },
@@ -47,12 +53,12 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
-// Simple Job Schema
+// Job Schema
 const jobSchema = new mongoose.Schema({
     title: { type: String, required: true },
     description: { type: String, required: true },
     location: { type: String, required: true },
-    category: { type: String, required: true },
+    category: { type: String, default: 'general' },
     phone: { type: String, required: true },
     whatsapp: { type: String, default: '' },
     businessType: { type: String, default: 'Individual' },
@@ -64,13 +70,29 @@ const jobSchema = new mongoose.Schema({
 
 const Job = mongoose.model('Job', jobSchema);
 
-// Test route
+// Application Schema (for tracking job applications)
+const applicationSchema = new mongoose.Schema({
+    jobId: { type: mongoose.Schema.Types.ObjectId, ref: 'Job', required: true },
+    employeeId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    employeeName: { type: String, required: true },
+    employeePhone: { type: String, required: true },
+    appliedDate: { type: Date, default: Date.now },
+    status: { type: String, default: 'pending' }
+});
+
+const Application = mongoose.model('Application', applicationSchema);
+
+// ========== ROUTES ==========
+
+// Root endpoint
 app.get('/', (req, res) => {
     res.json({ 
         success: true, 
         message: '🚀 Kazi Mashinani API is running!', 
         timestamp: new Date().toISOString(),
-        database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected'
+        database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected',
+        databaseName: 'kaziDB',
+        collections: ['users', 'jobs', 'applications']
     });
 });
 
@@ -78,31 +100,49 @@ app.get('/', (req, res) => {
 app.get('/health', (req, res) => {
     res.json({ 
         success: true, 
-        message: 'Server is healthy ✅', 
+        message: '✅ Server is healthy', 
         timestamp: new Date().toISOString(),
         database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected'
     });
 });
 
-// Get all jobs
-app.get('/jobs', async (req, res) => {
+// Test database connection
+app.get('/test-db', async (req, res) => {
     try {
-        const jobs = await Job.find({ status: 'active' }).sort({ postedDate: -1 });
-        res.json({ success: true, jobs });
+        const userCount = await User.countDocuments();
+        const jobCount = await Job.countDocuments();
+        const applicationCount = await Application.countDocuments();
+        
+        res.json({
+            success: true,
+            database: 'Connected',
+            collections: {
+                users: userCount,
+                jobs: jobCount,
+                applications: applicationCount
+            }
+        });
     } catch (error) {
-        console.error('Get jobs error:', error);
-        res.json({ success: true, jobs: [] }); // Return empty array instead of error
+        res.json({
+            success: false,
+            error: error.message
+        });
     }
 });
 
-// Get all employees
-app.get('/employees', async (req, res) => {
+// ========== AUTH ROUTES ==========
+
+// Check if phone exists
+app.post('/auth/check-phone', async (req, res) => {
     try {
-        const employees = await User.find({ role: 'employee' }).select('-password');
-        res.json({ success: true, employees });
+        const { phone } = req.body;
+        const cleanPhone = phone.replace(/\D/g, '');
+        
+        const existingUser = await User.findOne({ phone: cleanPhone });
+        res.json({ exists: !!existingUser });
     } catch (error) {
-        console.error('Get employees error:', error);
-        res.json({ success: true, employees: [] }); // Return empty array instead of error
+        console.error('Check phone error:', error);
+        res.status(500).json({ success: false, error: 'Server error' });
     }
 });
 
@@ -111,7 +151,7 @@ app.post('/auth/signup', async (req, res) => {
     try {
         const { name, phone, location, password, role, specialization, jobType } = req.body;
         
-        console.log('Signup attempt:', { name, phone: phone.substring(0, 6) + '...', location, role });
+        console.log('📝 Signup attempt:', { name, phone: phone?.substring(0, 6) + '...', location, role });
         
         // Validate required fields
         if (!name || !phone || !location || !password || !role) {
@@ -136,11 +176,12 @@ app.post('/auth/signup', async (req, res) => {
             location,
             password: hashedPassword,
             role,
-            specialization: role === 'employee' ? specialization : '',
-            jobType: role === 'employer' ? jobType : ''
+            specialization: role === 'employee' ? (specialization || '') : '',
+            jobType: role === 'employer' ? (jobType || '') : ''
         });
 
         await user.save();
+        console.log('✅ New user created:', user.name);
 
         // Generate token
         const token = jwt.sign(
@@ -166,7 +207,7 @@ app.post('/auth/signup', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Signup error:', error);
+        console.error('❌ Signup error:', error);
         res.status(500).json({ success: false, error: 'Server error during registration' });
     }
 });
@@ -176,7 +217,7 @@ app.post('/auth/signin', async (req, res) => {
     try {
         const { phone, password } = req.body;
         
-        console.log('Signin attempt:', { phone: phone.substring(0, 6) + '...' });
+        console.log('🔐 Signin attempt:', { phone: phone?.substring(0, 6) + '...' });
         
         if (!phone || !password) {
             return res.status(400).json({ success: false, error: 'Phone and password are required' });
@@ -207,6 +248,8 @@ app.post('/auth/signin', async (req, res) => {
             { expiresIn: '24h' }
         );
 
+        console.log('✅ User signed in:', user.name);
+
         res.json({
             success: true,
             token,
@@ -224,22 +267,25 @@ app.post('/auth/signin', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Signin error:', error);
+        console.error('❌ Signin error:', error);
         res.status(500).json({ success: false, error: 'Server error during login' });
     }
 });
 
-// Check if phone exists
-app.post('/auth/check-phone', async (req, res) => {
+// ========== JOB ROUTES ==========
+
+// Get all jobs
+app.get('/jobs', async (req, res) => {
     try {
-        const { phone } = req.body;
-        const cleanPhone = phone.replace(/\D/g, '');
+        const jobs = await Job.find({ status: 'active' })
+            .sort({ postedDate: -1 })
+            .limit(50);
         
-        const existingUser = await User.findOne({ phone: cleanPhone });
-        res.json({ exists: !!existingUser });
+        console.log(`📋 Sent ${jobs.length} jobs to client`);
+        res.json({ success: true, jobs });
     } catch (error) {
-        console.error('Check phone error:', error);
-        res.json({ exists: false });
+        console.error('❌ Get jobs error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch jobs' });
     }
 });
 
@@ -247,6 +293,8 @@ app.post('/auth/check-phone', async (req, res) => {
 app.post('/jobs', async (req, res) => {
     try {
         const { title, description, location, category, phone, whatsapp, businessType, employerId, employerName } = req.body;
+        
+        console.log('📮 New job posting:', { title, location, employerName });
         
         if (!title || !description || !location || !phone) {
             return res.status(400).json({ success: false, error: 'Required fields missing' });
@@ -268,6 +316,7 @@ app.post('/jobs', async (req, res) => {
         });
 
         await job.save();
+        console.log('✅ Job posted successfully:', job.title);
 
         res.json({
             success: true,
@@ -287,14 +336,70 @@ app.post('/jobs', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Post job error:', error);
+        console.error('❌ Post job error:', error);
         res.status(500).json({ success: false, error: 'Failed to post job' });
     }
 });
 
+// ========== EMPLOYEE ROUTES ==========
+
+// Get all employees
+app.get('/employees', async (req, res) => {
+    try {
+        const employees = await User.find({ role: 'employee' })
+            .select('-password')
+            .sort({ joinDate: -1 })
+            .limit(50);
+        
+        console.log(`👥 Sent ${employees.length} employees to client`);
+        res.json({ success: true, employees });
+    } catch (error) {
+        console.error('❌ Get employees error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch employees' });
+    }
+});
+
+// ========== APPLICATION ROUTES ==========
+
+// Submit job application
+app.post('/applications', async (req, res) => {
+    try {
+        const { jobId, employeeId, employeeName, employeePhone } = req.body;
+        
+        const application = new Application({
+            jobId,
+            employeeId,
+            employeeName,
+            employeePhone
+        });
+
+        await application.save();
+        console.log('✅ Application submitted by:', employeeName);
+
+        res.json({ success: true, application });
+    } catch (error) {
+        console.error('❌ Application error:', error);
+        res.status(500).json({ success: false, error: 'Failed to submit application' });
+    }
+});
+
+// Get applications for a job
+app.get('/applications/job/:jobId', async (req, res) => {
+    try {
+        const applications = await Application.find({ jobId: req.params.jobId })
+            .sort({ appliedDate: -1 });
+        
+        res.json({ success: true, applications });
+    } catch (error) {
+        console.error('❌ Get applications error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch applications' });
+    }
+});
+
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`🎯 Server running on port ${PORT}`);
     console.log(`🔗 Health check: http://localhost:${PORT}/health`);
     console.log(`🔗 Main endpoint: http://localhost:${PORT}/`);
+    console.log(`🔗 Test DB: http://localhost:${PORT}/test-db`);
 });
